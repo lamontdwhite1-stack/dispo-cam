@@ -149,6 +149,20 @@
 
   #toast{position:fixed;left:50%;bottom:190px;transform:translateX(-50%) translateY(8px);z-index:55;background:rgba(20,20,22,.92);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.06em;padding:9px 16px;border-radius:999px;opacity:0;pointer-events:none;transition:all .25s;white-space:nowrap}
   #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  /* capture mode + rec badge + roll video thumbs */
+  #capMode{display:flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:var(--panel);backdrop-filter:blur(12px);margin:0 auto}
+  #capMode button{padding:7px 20px;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;letter-spacing:.16em;background:transparent;color:var(--dim);border:none;cursor:pointer}
+  #capMode button.on{background:var(--ink);color:#000}
+  #capMode button.on.vid{background:#e5484d;color:#fff}
+  #recBadge{position:absolute;top:calc(env(safe-area-inset-top,0px) + 62px);left:50%;transform:translateX(-50%);z-index:21;display:none;align-items:center;gap:7px;background:rgba(0,0,0,.55);border:1px solid var(--line);backdrop-filter:blur(10px);padding:6px 13px;border-radius:999px;font-family:'JetBrains Mono',monospace;font-size:11.5px;letter-spacing:.1em}
+  #recBadge.on{display:flex}
+  #recBadge i{width:8px;height:8px;border-radius:50%;background:#e5484d;animation:recpulse 1.1s infinite}
+  @keyframes recpulse{0%,100%{opacity:1}50%{opacity:.25}}
+  #rollGrid video{width:100%;aspect-ratio:3/4;object-fit:cover;display:block;background:#111;cursor:pointer}
+  .vwrap{position:relative}
+  .vbadge{position:absolute;left:6px;bottom:6px;background:rgba(0,0,0,.6);color:#fff;font-size:9px;font-family:'JetBrains Mono',monospace;padding:2px 7px;border-radius:6px;letter-spacing:.12em;pointer-events:none}
+  #viewerVid{flex:1;width:100%;object-fit:contain;min-height:0;background:#000}
 </style>
 </head>
 <body>
@@ -162,6 +176,7 @@
   <div id="reticle"></div>
   <div id="count"></div>
   <div id="blink"></div>
+  <div id="recBadge"><i></i><span id="recTime">0:00</span></div>
 
   <!-- top bar -->
   <div class="bar" id="topbar">
@@ -220,6 +235,11 @@
       </div>
     </div>
 
+    <div id="capMode">
+      <button id="cmPhoto" class="on">PHOTO</button>
+      <button id="cmVideo">VIDEO</button>
+    </div>
+
     <div id="shutterRow">
       <div style="position:relative">
         <div id="rollBtn"></div>
@@ -254,6 +274,7 @@
 <!-- ======================= VIEWER ======================= -->
 <div id="viewer">
   <img id="viewerImg" alt="Exposure">
+  <video id="viewerVid" playsinline controls loop style="display:none"></video>
   <div id="viewerBar">
     <button class="vbtn" id="delBtn">DELETE</button>
     <button class="vbtn primary" id="shareBtn">SAVE / SHARE</button>
@@ -289,7 +310,9 @@ const S = {
   settings:{date:true, border:false, leak:true, level:false, full:true},
   hw:{iso:false, ss:false, ev:false, focus:false, zoom:false},
   stream:null, track:null, capturing:false,
-  dustSeed: Math.random()*100
+  dustSeed: Math.random()*100,
+  capMode:'photo', recording:false, recorder:null, recChunks:[],
+  audioStream:null, recT0:0, recInt:null
 };
 
 /* Film stock science — lift/gamma/gain curves, grain, halation,
@@ -735,6 +758,7 @@ function toast(msg){
 }
 
 async function capture(){
+  if(S.capMode === 'video'){ toggleRecord(); return; }
   if(S.capturing || !video.videoWidth) return;
   S.capturing = true;
   if(S.timer>0){
@@ -792,17 +816,87 @@ async function capture(){
   if(torchOn){ try{ await S.track.applyConstraints({ advanced:[{ torch:false }] }); }catch(e){} }
 
   out.toBlob(async blob=>{
-    if(blob){ await rollAdd(blob); toast('SAVED TO ROLL'); }
+    if(blob){ await rollAdd(blob, 'photo'); toast('SAVED TO ROLL'); }
     if(navigator.vibrate) navigator.vibrate(12);
     S.capturing = false;
   }, 'image/jpeg', 0.92);
 }
 $('shutter').addEventListener('click', capture);
 $('flipBtn').addEventListener('click', async ()=>{
+  if(S.recording){ toast('STOP VIDEO FIRST'); return; }
   S.facing = S.facing==='environment' ? 'user' : 'environment';
   try{ await initCamera(); toast(S.facing==='user' ? 'FRONT CAMERA' : 'REAR CAMERA'); }
   catch(e){ toast('CAMERA SWITCH FAILED'); }
 });
+
+/* ---------------- Video mode ----------------
+   Records the processed viewfinder stream itself, so the film
+   stock, dials, grain, leaks and distortion are baked into the
+   footage. Mic joins the recording; silent if it's declined.   */
+function setCapMode(m){
+  if(S.recording) return;
+  S.capMode = m;
+  $('cmPhoto').classList.toggle('on', m==='photo');
+  const v = $('cmVideo');
+  v.classList.toggle('on', m==='video');
+  v.classList.toggle('vid', m==='video');
+  toast(m==='video' ? 'VIDEO MODE · FILM LOOK BAKED IN' : 'PHOTO MODE');
+}
+$('cmPhoto').addEventListener('click', ()=> setCapMode('photo'));
+$('cmVideo').addEventListener('click', ()=> setCapMode('video'));
+
+function fmtRec(ms){
+  const s = Math.floor(ms/1000);
+  return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+}
+async function toggleRecord(){
+  if(S.recording){
+    if(S.recorder && S.recorder.state !== 'inactive') S.recorder.stop();
+    return;
+  }
+  if(!('MediaRecorder' in window) || typeof view.captureStream !== 'function'){
+    toast('VIDEO NEEDS A NEWER IOS / SAFARI'); return;
+  }
+  if(!S.audioStream){
+    try{ S.audioStream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:false, noiseSuppression:false } }); }
+    catch(e){ S.audioStream = null; }
+  }
+  try{
+    const vs = view.captureStream(30);
+    const tracks = [...vs.getVideoTracks()];
+    if(S.audioStream) tracks.push(...S.audioStream.getAudioTracks());
+    const ms = new MediaStream(tracks);
+    const mt = ['video/mp4;codecs=avc1.640028,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm']
+      .find(t=>{ try{ return MediaRecorder.isTypeSupported(t); }catch(e){ return false; } });
+    try{ S.recorder = new MediaRecorder(ms, { mimeType: mt, videoBitsPerSecond: 10000000, audioBitsPerSecond: 128000 }); }
+    catch(e){ S.recorder = new MediaRecorder(ms); }
+    S.recChunks = [];
+    S.recorder.ondataavailable = e=>{ if(e.data && e.data.size) S.recChunks.push(e.data); };
+    S.recorder.onstop = finishRec;
+    S.recorder.start(250);
+    S.recording = true;
+    S.recT0 = Date.now();
+    $('shutter').classList.add('rec');
+    $('recBadge').classList.add('on');
+    $('recTime').textContent = '0:00';
+    S.recInt = setInterval(()=>{ $('recTime').textContent = fmtRec(Date.now() - S.recT0); }, 500);
+    if(navigator.vibrate) navigator.vibrate(8);
+    toast(S.audioStream ? 'REC · SOUND ON' : 'REC · NO MIC — SILENT FILM');
+  }catch(e){
+    toast('VIDEO COULD NOT START');
+  }
+}
+async function finishRec(){
+  clearInterval(S.recInt);
+  S.recording = false;
+  $('shutter').classList.remove('rec');
+  $('recBadge').classList.remove('on');
+  const type = (S.recorder && S.recorder.mimeType) || 'video/mp4';
+  const blob = new Blob(S.recChunks, { type });
+  S.recChunks = [];
+  if(blob.size){ await rollAdd(blob, 'video'); toast('VIDEO SAVED TO ROLL'); }
+  if(navigator.vibrate) navigator.vibrate(12);
+}
 
 /* ---------------- Film roll (IndexedDB) ---------------- */
 let db = null, rollItems = [], viewing = null;
@@ -814,11 +908,11 @@ function dbOpen(){
     r.onerror = ()=> rej(r.error);
   });
 }
-async function rollAdd(blob){
+async function rollAdd(blob, kind){
   db = db || await dbOpen();
   return new Promise(res=>{
     const tx = db.transaction('roll','readwrite');
-    tx.objectStore('roll').add({ blob, ts: Date.now() });
+    tx.objectStore('roll').add({ blob, ts: Date.now(), kind: kind || 'photo' });
     tx.oncomplete = ()=>{ refreshRoll(); res(); };
     tx.onerror = ()=> res();
   });
@@ -845,32 +939,57 @@ async function refreshRoll(){
   rollItems = await rollAll().catch(()=>[]);
   const grid = $('rollGrid'); grid.innerHTML = '';
   rollItems.forEach(it=>{
-    const img = document.createElement('img');
-    img.src = URL.createObjectURL(it.blob);
-    img.addEventListener('click', ()=> openViewer(it));
-    grid.appendChild(img);
+    if(it.kind === 'video'){
+      const wrap = document.createElement('div'); wrap.className = 'vwrap';
+      const vid = document.createElement('video');
+      vid.src = URL.createObjectURL(it.blob) + '#t=0.1';
+      vid.muted = true; vid.playsInline = true; vid.preload = 'metadata';
+      vid.addEventListener('click', ()=> openViewer(it));
+      const bd = document.createElement('span'); bd.className = 'vbadge'; bd.textContent = '▶ VIDEO';
+      wrap.appendChild(vid); wrap.appendChild(bd);
+      grid.appendChild(wrap);
+    } else {
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(it.blob);
+      img.addEventListener('click', ()=> openViewer(it));
+      grid.appendChild(img);
+    }
   });
   $('rollEmpty').style.display = rollItems.length ? 'none' : 'flex';
   grid.style.display = rollItems.length ? 'grid' : 'none';
   $('rollCount').style.display = rollItems.length ? 'block' : 'none';
   $('rollCount').textContent = rollItems.length;
-  if(rollItems.length) $('rollBtn').style.backgroundImage = 'url(' + URL.createObjectURL(rollItems[0].blob) + ')';
+  const firstPhoto = rollItems.find(x=>x.kind !== 'video');
+  if(firstPhoto) $('rollBtn').style.backgroundImage = 'url(' + URL.createObjectURL(firstPhoto.blob) + ')';
 }
 function openViewer(it){
   viewing = it;
-  $('viewerImg').src = URL.createObjectURL(it.blob);
+  const url = URL.createObjectURL(it.blob);
+  if(it.kind === 'video'){
+    $('viewerImg').style.display = 'none';
+    const v = $('viewerVid');
+    v.style.display = 'block'; v.src = url;
+    v.play().catch(()=>{});
+  } else {
+    const v = $('viewerVid');
+    v.pause(); v.style.display = 'none'; v.removeAttribute('src');
+    $('viewerImg').style.display = 'block';
+    $('viewerImg').src = url;
+  }
   $('viewer').classList.add('open');
 }
-$('closeViewer').addEventListener('click', ()=> $('viewer').classList.remove('open'));
+$('closeViewer').addEventListener('click', ()=>{ $('viewerVid').pause(); $('viewer').classList.remove('open'); });
 $('delBtn').addEventListener('click', async ()=>{
   if(!viewing) return;
+  $('viewerVid').pause();
   await rollDel(viewing.id);
   $('viewer').classList.remove('open');
   refreshRoll(); toast('FRAME DELETED');
 });
 $('shareBtn').addEventListener('click', async ()=>{
   if(!viewing) return;
-  const file = new File([viewing.blob], 'dispo-' + viewing.id + '.jpg', { type:'image/jpeg' });
+  const isVid = viewing.kind === 'video';
+  const file = new File([viewing.blob], 'dispo-' + viewing.id + (isVid ? '.mp4' : '.jpg'), { type: viewing.blob.type || (isVid ? 'video/mp4' : 'image/jpeg') });
   if(navigator.canShare && navigator.canShare({ files:[file] })){
     try{ await navigator.share({ files:[file] }); }catch(e){}
   } else {
