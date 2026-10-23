@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>DISPO — Disposable Film Camera</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+  :root{
+    --amber:#ffb300;
+    --stamp:#ff7b00;
+    --ink:#f5f2ec;
+    --dim:rgba(245,242,236,.55);
+    --faint:rgba(245,242,236,.28);
+    --panel:rgba(16,16,18,.72);
+    --line:rgba(255,255,255,.09);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0}
+  html,body{height:100%;background:#000;color:var(--ink);font-family:'Archivo',sans-serif;overflow:hidden;user-select:none;-webkit-user-select:none}
+  .mono{font-family:'JetBrains Mono',monospace}
+
+  /* ---------- Viewfinder ---------- */
+  #stage{position:fixed;inset:0;background:#000}
+  #view{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+  #camVideo{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+
+  /* rule of thirds */
+  #grid{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .25s}
+  #grid.on{opacity:1}
+  #grid::before,#grid::after{content:"";position:absolute;background:rgba(255,255,255,.16)}
+  #grid::before{left:33.333%;top:0;width:1px;height:100%;box-shadow:33.333vw 0 0 rgba(255,255,255,.16)}
+  #grid::after{top:33.333%;left:0;height:1px;width:100%;box-shadow:0 33.333vh 0 rgba(255,255,255,.16)}
+
+  /* level line */
+  #horizon{position:absolute;left:50%;top:50%;width:120px;height:1px;background:rgba(255,179,0,.0);transform:translate(-50%,-50%);pointer-events:none;transition:background .3s}
+  #horizon.on{background:rgba(255,179,0,.55)}
+
+  /* focus reticle */
+  #reticle{position:absolute;width:74px;height:74px;margin:-37px 0 0 -37px;border:1.5px solid var(--amber);border-radius:6px;opacity:0;pointer-events:none;box-shadow:0 0 0 1px rgba(0,0,0,.25), inset 0 0 12px rgba(255,179,0,.12)}
+  #reticle::after{content:"";position:absolute;right:-14px;top:50%;width:8px;height:1.5px;background:var(--amber)}
+  #reticle.pop{animation:retpop .45s cubic-bezier(.2,1.4,.3,1)}
+  @keyframes retpop{0%{transform:scale(1.35);opacity:0}25%{opacity:1}100%{transform:scale(1);opacity:1}}
+  #reticle.fade{transition:opacity .6s;opacity:0!important}
+
+  /* countdown + capture flash */
+  #count{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:120px;font-weight:700;color:#fff;text-shadow:0 4px 40px rgba(0,0,0,.6);opacity:0;pointer-events:none}
+  #blink{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none}
+
+  /* ---------- Chrome (top / bottom UI) ---------- */
+  .bar{position:absolute;left:0;right:0;display:flex;align-items:center;z-index:20}
+  #topbar{top:0;padding:calc(env(safe-area-inset-top,0px) + 12px) 14px 8px;justify-content:space-between;background:linear-gradient(180deg,rgba(0,0,0,.55),transparent)}
+  #botbar{bottom:0;padding:10px 18px calc(env(safe-area-inset-bottom,0px) + 14px);flex-direction:column;gap:10px;background:linear-gradient(0deg,rgba(0,0,0,.62),transparent)}
+
+  .brand{display:flex;align-items:baseline;gap:8px}
+  .brand b{font-weight:800;letter-spacing:.22em;font-size:15px}
+  .brand span{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--dim);letter-spacing:.08em}
+
+  .tbtn{width:40px;height:40px;border-radius:50%;border:1px solid var(--line);background:var(--panel);backdrop-filter:blur(12px);color:var(--ink);display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;position:relative}
+  .tbtn.on{color:#000;background:var(--amber);border-color:var(--amber)}
+  .tbtn .mini{position:absolute;bottom:-4px;right:-4px;background:#000;border:1px solid var(--line);color:var(--amber);font-family:'JetBrains Mono',monospace;font-size:8px;padding:1px 4px;border-radius:6px}
+  .trow{display:flex;gap:8px;align-items:center}
+
+  /* readout HUD */
+  #readout{display:flex;gap:12px;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--dim);letter-spacing:.05em}
+  #readout b{color:var(--ink);font-weight:500}
+  #readout .warn{color:var(--amber)}
+
+  /* film stock chips */
+  #stocks{display:flex;gap:6px;justify-content:flex-start;overflow-x:auto;width:100%;padding:2px;scrollbar-width:none}
+  #stocks::-webkit-scrollbar{display:none}
+  .chip{flex:none}
+  .chip{padding:7px 13px;border-radius:999px;border:1px solid var(--line);background:var(--panel);backdrop-filter:blur(12px);color:var(--dim);font-size:10.5px;font-weight:700;letter-spacing:.14em;cursor:pointer;transition:all .2s}
+  .chip.on{color:#000;background:var(--ink);border-color:var(--ink)}
+  .chip.kodak.on{background:var(--amber);border-color:var(--amber)}
+  .chip.fuji.on{background:#7fd4a8;border-color:#7fd4a8}
+
+  /* manual rail */
+  #rail{width:100%;max-width:520px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:18px;backdrop-filter:blur(16px);padding:9px 12px 11px}
+  #paramTabs{display:flex;justify-content:space-between;margin-bottom:8px}
+  .ptab{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.12em;color:var(--faint);padding:4px 7px;border-radius:7px;cursor:pointer;font-weight:700}
+  .ptab.on{color:var(--amber);background:rgba(255,179,0,.12)}
+  .ptab.locked{opacity:.35}
+  #dialRow{display:flex;align-items:center;gap:12px}
+  #dialVal{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--ink);min-width:74px;text-align:right;font-weight:700}
+  #dialWrap{flex:1;position:relative;height:30px}
+  #dialTicks{position:absolute;inset:0;display:flex;justify-content:space-between;align-items:center;pointer-events:none}
+  #dialTicks i{width:1px;height:8px;background:rgba(255,255,255,.22);display:block}
+  #dialTicks i:nth-child(odd){height:5px;background:rgba(255,255,255,.13)}
+  input[type=range]#dial{-webkit-appearance:none;appearance:none;width:100%;height:30px;background:transparent;position:relative;z-index:2;cursor:ew-resize}
+  input[type=range]#dial::-webkit-slider-runnable-track{height:2px;background:rgba(255,255,255,.18);border-radius:2px}
+  input[type=range]#dial::-webkit-slider-thumb{-webkit-appearance:none;width:3px;height:26px;background:var(--amber);border-radius:2px;margin-top:-12px;box-shadow:0 0 10px rgba(255,179,0,.8)}
+  input[type=range]#dial::-moz-range-track{height:2px;background:rgba(255,255,255,.18)}
+  input[type=range]#dial::-moz-range-thumb{width:3px;height:26px;background:var(--amber);border:none;border-radius:2px}
+  #modeRow{display:flex;justify-content:space-between;align-items:center;margin-top:7px}
+  #modeRow .lbl{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--faint);letter-spacing:.14em}
+  #amToggle{display:flex;border:1px solid var(--line);border-radius:999px;overflow:hidden}
+  #amToggle button{padding:5px 13px;font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:700;letter-spacing:.12em;background:transparent;color:var(--dim);border:none;cursor:pointer}
+  #amToggle button.on{background:var(--ink);color:#000}
+
+  /* shutter row */
+  #shutterRow{display:flex;align-items:center;justify-content:space-between;width:100%;max-width:520px;margin:0 auto;padding:0 8px}
+  #rollBtn{width:48px;height:48px;border-radius:10px;border:1.5px solid rgba(255,255,255,.35);background:#111 center/cover no-repeat;cursor:pointer;position:relative;overflow:hidden}
+  #rollBtn::after{content:"ROLL";position:absolute;left:0;right:0;bottom:0;font-family:'JetBrains Mono',monospace;font-size:7px;letter-spacing:.2em;text-align:center;color:rgba(255,255,255,.85);background:rgba(0,0,0,.45);padding:1px 0}
+  #rollCount{position:absolute;top:-6px;right:-6px;z-index:3;background:var(--amber);color:#000;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;border-radius:999px;padding:2px 6px}
+  #shutter{width:74px;height:74px;border-radius:50%;border:4px solid var(--ink);background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .08s}
+  #shutter:active{transform:scale(.93)}
+  #shutter i{width:58px;height:58px;border-radius:50%;background:var(--ink);display:block;transition:background .2s}
+  #shutter.rec i{background:#e5484d;border-radius:14px}
+  #flipBtn{width:48px;height:48px;border-radius:50%;border:1px solid var(--line);background:var(--panel);backdrop-filter:blur(12px);color:var(--ink);font-size:17px;cursor:pointer}
+
+  /* ---------- Sheets / drawers ---------- */
+  .sheet{position:fixed;inset:0;z-index:40;background:rgba(4,4,6,.9);backdrop-filter:blur(18px);display:flex;flex-direction:column;opacity:0;pointer-events:none;transition:opacity .25s}
+  .sheet.open{opacity:1;pointer-events:auto}
+  .sheet header{display:flex;align-items:center;justify-content:space-between;padding:calc(env(safe-area-inset-top,0px) + 16px) 18px 12px}
+  .sheet h2{font-size:13px;letter-spacing:.22em;font-weight:800}
+  .xbtn{width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--panel);color:var(--ink);font-size:15px;cursor:pointer}
+  #rollGrid{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:3px;padding:3px}
+  #rollGrid img{width:100%;aspect-ratio:3/4;object-fit:cover;display:block;cursor:pointer;background:#111}
+  #rollEmpty{flex:1;display:none;align-items:center;justify-content:center;color:var(--faint);font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.15em;text-align:center;padding:30px}
+
+  .setrow{display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid var(--line)}
+  .setrow .t{font-size:13.5px;font-weight:600}
+  .setrow .d{font-size:11px;color:var(--dim);margin-top:2px;max-width:230px;line-height:1.45}
+  .tgl{width:50px;height:30px;border-radius:999px;background:rgba(255,255,255,.14);position:relative;cursor:pointer;transition:background .2s;flex-shrink:0}
+  .tgl::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:left .2s}
+  .tgl.on{background:var(--amber)}
+  .tgl.on::after{left:23px}
+
+  #viewer{position:fixed;inset:0;z-index:50;background:#000;display:none;flex-direction:column}
+  #viewer.open{display:flex}
+  #viewerImg{flex:1;width:100%;object-fit:contain;min-height:0}
+  #viewerBar{display:flex;gap:10px;justify-content:center;padding:14px 14px calc(env(safe-area-inset-bottom,0px) + 16px)}
+  .vbtn{flex:1;max-width:150px;padding:13px 0;border-radius:13px;border:1px solid var(--line);background:var(--panel);color:var(--ink);font-family:'Archivo',sans-serif;font-size:12px;font-weight:700;letter-spacing:.12em;cursor:pointer}
+  .vbtn.primary{background:var(--ink);color:#000;border-color:var(--ink)}
+
+  /* ---------- Gate ---------- */
+  #gate{position:fixed;inset:0;z-index:60;background:#050505;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:34px;text-align:center;gap:0}
+  #gate .badge{width:74px;height:74px;border-radius:20px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:30px;background:linear-gradient(145deg,#17171a,#0a0a0c);margin-bottom:22px}
+  #gate h1{font-size:30px;font-weight:800;letter-spacing:.3em;text-indent:.3em}
+  #gate .sub{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--dim);letter-spacing:.18em;margin-top:10px;line-height:1.9}
+  #gate p{font-size:13px;color:var(--dim);line-height:1.65;max-width:300px;margin-top:18px}
+  #startBtn{margin-top:32px;background:var(--ink);color:#000;border:none;font-family:'Archivo',sans-serif;font-weight:800;letter-spacing:.18em;font-size:13px;padding:16px 38px;border-radius:999px;cursor:pointer}
+  #gateErr{margin-top:16px;color:#e5484d;font-size:12px;line-height:1.5;max-width:300px;display:none}
+  #gate .foot{position:absolute;bottom:calc(env(safe-area-inset-bottom,0px) + 20px);font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--faint);letter-spacing:.2em}
+
+  #toast{position:fixed;left:50%;bottom:190px;transform:translateX(-50%) translateY(8px);z-index:55;background:rgba(20,20,22,.92);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.06em;padding:9px 16px;border-radius:999px;opacity:0;pointer-events:none;transition:all .25s;white-space:nowrap}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<!-- ======================= VIEWFINDER ======================= -->
+<div id="stage">
+  <canvas id="view"></canvas>
+  <video id="camVideo" playsinline muted autoplay></video>
+  <div id="grid"></div>
+  <div id="horizon"></div>
+  <div id="reticle"></div>
+  <div id="count"></div>
+  <div id="blink"></div>
+
+  <!-- top bar -->
+  <div class="bar" id="topbar">
+    <div class="brand"><b>DISPO</b><span>FILM CAMERA · 35MM</span></div>
+    <div class="trow">
+      <button class="tbtn" id="flashBtn" title="Flash">⚡</button>
+      <button class="tbtn" id="timerBtn" title="Timer">◷<span class="mini" id="timerMini" style="display:none">3</span></button>
+      <button class="tbtn" id="gridBtn" title="Grid">▦</button>
+      <button class="tbtn" id="setBtn" title="Settings">⚙</button>
+    </div>
+  </div>
+
+  <!-- bottom bar -->
+  <div class="bar" id="botbar">
+    <div id="readout" class="mono">
+      <span>ISO <b id="roISO">400</b></span>
+      <span>SS <b id="roSS">1/125</b></span>
+      <span>EV <b id="roEV">0.0</b></span>
+      <span>WB <b id="roWB">5600K</b></span>
+      <span id="roHW" class="warn" style="display:none">HW</span>
+    </div>
+
+    <div id="stocks">
+      <button class="chip kodak on" data-stock="kodak">KODAK</button>
+      <button class="chip fuji" data-stock="fuji">FUJI</button>
+      <button class="chip" data-stock="gold">GOLD 200</button>
+      <button class="chip" data-stock="mono">MONO</button>
+      <button class="chip" data-stock="party">PARTY</button>
+      <button class="chip" data-stock="dream">DREAM</button>
+      <button class="chip" data-stock="fisheye">FISHEYE</button>
+      <button class="chip" data-stock="y94">1994</button>
+    </div>
+
+    <div id="rail">
+      <div id="paramTabs">
+        <span class="ptab on" data-p="ev">EV</span>
+        <span class="ptab" data-p="iso">ISO</span>
+        <span class="ptab" data-p="ss">SHUTTER</span>
+        <span class="ptab" data-p="wb">WB</span>
+        <span class="ptab" data-p="focus">FOCUS</span>
+        <span class="ptab" data-p="zoom">ZOOM</span>
+      </div>
+      <div id="dialRow">
+        <div id="dialWrap">
+          <div id="dialTicks"></div>
+          <input type="range" id="dial" min="-20" max="20" step="1" value="0">
+        </div>
+        <div id="dialVal">±0.0</div>
+      </div>
+      <div id="modeRow">
+        <span class="lbl" id="hwNote">PRO MANUAL ENGINE</span>
+        <div id="amToggle">
+          <button id="amAuto" class="on">AUTO</button>
+          <button id="amMan">MANUAL</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="shutterRow">
+      <div style="position:relative">
+        <div id="rollBtn"></div>
+        <span id="rollCount" style="display:none">0</span>
+      </div>
+      <button id="shutter"><i></i></button>
+      <button id="flipBtn">⟲</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= FILM ROLL ======================= -->
+<div class="sheet" id="rollSheet">
+  <header><h2>FILM ROLL</h2><button class="xbtn" data-close="rollSheet">✕</button></header>
+  <div id="rollEmpty">NO EXPOSURES YET<br><span style="letter-spacing:.05em;font-size:10px">SHOOT YOUR FIRST FRAME</span></div>
+  <div id="rollGrid"></div>
+</div>
+
+<!-- ======================= SETTINGS ======================= -->
+<div class="sheet" id="setSheet">
+  <header><h2>SETTINGS</h2><button class="xbtn" data-close="setSheet">✕</button></header>
+  <div>
+    <div class="setrow"><div><div class="t">Date stamp</div><div class="d">Burns the classic orange lab date into the corner of every frame.</div></div><div class="tgl on" id="tglDate"></div></div>
+    <div class="setrow"><div><div class="t">Print border</div><div class="d">White lab-print border around the finished photo.</div></div><div class="tgl" id="tglBorder"></div></div>
+    <div class="setrow"><div><div class="t">Random light leaks</div><div class="d">Occasional warm leaks, like a worn disposable body. Unpredictable — that's the point.</div></div><div class="tgl on" id="tglLeak"></div></div>
+    <div class="setrow"><div><div class="t">Level line</div><div class="d">Center horizon guide in the viewfinder.</div></div><div class="tgl" id="tglLevel"></div></div>
+    <div class="setrow"><div><div class="t">Full-resolution capture</div><div class="d">Off loads faster; on keeps every pixel the sensor gives the browser.</div></div><div class="tgl on" id="tglFull"></div></div>
+  </div>
+  <p class="mono" style="padding:18px;font-size:10px;color:var(--faint);letter-spacing:.08em;line-height:1.9">NOTE — ON IPHONE, SAFARI LIMITS TRUE HARDWARE SHUTTER / ISO / FOCUS CONTROL FOR WEB APPS. DISPO USES REAL SENSOR CONTROLS WHEREVER APPLE ALLOWS THEM (MARKED “HW” IN THE READOUT) AND ITS OPTICAL-GRADE PROCESSING ENGINE EVERYWHERE ELSE, SO EVERY DIAL STILL CHANGES THE IMAGE.</p>
+</div>
+
+<!-- ======================= VIEWER ======================= -->
+<div id="viewer">
+  <img id="viewerImg" alt="Exposure">
+  <div id="viewerBar">
+    <button class="vbtn" id="delBtn">DELETE</button>
+    <button class="vbtn primary" id="shareBtn">SAVE / SHARE</button>
+    <button class="vbtn" id="closeViewer">CLOSE</button>
+  </div>
+</div>
+
+<!-- ======================= GATE ======================= -->
+<div id="gate">
+  <div class="badge">📸</div>
+  <h1>DISPO</h1>
+  <div class="sub">KODAK · FUJI · DISPOSABLE SCIENCE<br>PRO MANUAL CONTROLS</div>
+  <p>A disposable camera with a pro engine inside — real manual dials, film grain, halation, light leaks and lab date stamps. Nothing leaves your phone.</p>
+  <button id="startBtn">OPEN CAMERA</button>
+  <div id="gateErr"></div>
+  <div class="foot">DISPO · EST. 2026 · SHOOT FILM, NOT SCREENSHOTS</div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+/* ============================================================
+   DISPO — disposable film science + pro manual engine
+   ============================================================ */
+const $ = id => document.getElementById(id);
+const video = $('camVideo'), view = $('view');
+
+const S = {
+  stock:'kodak', mode:'auto',
+  ev:0, iso:400, ss:125, wb:5600, focus:50, zoom:1,
+  flash:false, timer:0, facing:'environment', param:'ev',
+  settings:{date:true, border:false, leak:true, level:false, full:true},
+  hw:{iso:false, ss:false, ev:false, focus:false, zoom:false},
+  stream:null, track:null, capturing:false,
+  dustSeed: Math.random()*100
+};
+
+/* Film stock science — lift/gamma/gain curves, grain, halation,
+   vignette, chromatic aberration, edge softness, warmth bias    */
+const STOCKS = {
+  kodak:{ lift:[.058,.050,.030], gain:[1.08,1.00,.89], gamma:.94, sat:1.20, vig:.44, grain:.050, ab:.0042, soft:.38, hal:.55, temp:.10 },
+  fuji: { lift:[.028,.056,.048], gain:[.94,1.04,1.01], gamma:.97, sat:1.08, vig:.38, grain:.046, ab:.0032, soft:.30, hal:.34, temp:-.07 },
+  gold: { lift:[.034,.029,.020], gain:[1.06,1.00,.92], gamma:.98, sat:1.13, vig:.24, grain:.026, ab:.0020, soft:.16, hal:.30, temp:.08 },
+  mono: { lift:[.042,.042,.042], gain:[1.02,1.02,1.02], gamma:.90, sat:0.00, vig:.52, grain:.078, ab:.0008, soft:.26, hal:.22, temp:0 },
+  /* ---- 90s pack: blur, flare, distortion, age ---- */
+  party:  { lift:[.045,.040,.035], gain:[1.10,1.02,.95], gamma:.92, sat:1.26, vig:.58, grain:.058, ab:.0040, soft:.30, hal:.40, temp:.05, flash:.85, flare:.30, leakP:.30 },
+  dream:  { lift:[.078,.062,.078], gain:[1.02,1.00,1.05], gamma:1.00, sat:1.04, vig:.30, grain:.034, ab:.0030, soft:.75, hal:1.25, temp:.02, blur:.85, flare:.35, leakP:.55 },
+  fisheye:{ lift:[.050,.045,.035], gain:[1.06,1.00,.92], gamma:.95, sat:1.16, vig:.62, grain:.045, ab:.0065, soft:.35, hal:.40, temp:.06, distort:.60, flare:.20 },
+  y94:    { lift:[.098,.084,.050], gain:[1.02,.99,.90], gamma:1.03, sat:.80, vig:.46, grain:.062, ab:.0040, soft:.40, hal:.45, temp:.16, dust:1.0, flare:.55, blur:.22, leakP:.85 }
+};
+const ISO_STEPS = [100,200,400,800,1600,3200];
+const SS_STEPS  = [15,30,60,125,250,500,1000,2000];
+
+/* ---------------- Camera ---------------- */
+async function initCamera(){
+  stopStream();
+  const constraints = {
+    audio:false,
+    video:{
+      facingMode:{ ideal:S.facing },
+      width:{ ideal:4032 }, height:{ ideal:3024 },
+      frameRate:{ ideal:30 }
+    }
+  };
+  S.stream = await navigator.mediaDevices.getUserMedia(constraints);
+  video.srcObject = S.stream;
+  await video.play();
+  S.track = S.stream.getVideoTracks()[0];
+  probeHardware();
+}
+
+function stopStream(){
+  if(S.stream){ S.stream.getTracks().forEach(t=>t.stop()); S.stream=null; S.track=null; }
+}
+
+function probeHardware(){
+  let caps = {};
+  try{ caps = S.track.getCapabilities ? S.track.getCapabilities() : {}; }catch(e){}
+  S.hw.iso   = 'iso' in caps;
+  S.hw.ss    = 'exposureTime' in caps;
+  S.hw.ev    = 'exposureCompensation' in caps;
+  S.hw.focus = ('focusDistance' in caps) || ('focusMode' in caps);
+  S.hw.zoom  = 'zoom' in caps;
+  const anyHw = Object.values(S.hw).some(Boolean);
+  $('roHW').style.display = anyHw ? 'inline' : 'none';
+  $('hwNote').textContent = anyHw ? 'HW SENSOR LINK ACTIVE' : 'PRO MANUAL ENGINE';
+}
+
+/* Push dial values to real sensor controls where the OS allows */
+let hwTimer = null;
+function applyHardware(){
+  if(!S.track) return;
+  clearTimeout(hwTimer);
+  hwTimer = setTimeout(async ()=>{
+    const adv = {};
+    if(S.hw.ev) adv.exposureCompensation = S.ev;
+    if(S.mode==='man'){
+      if(S.hw.iso) adv.iso = S.iso;
+      if(S.hw.ss)  adv.exposureTime = 10000 / S.ss; /* 100µs units */
+      if(S.hw.focus){ adv.focusMode = 'manual'; adv.focusDistance = S.focus/100; }
+    } else if(S.hw.focus){
+      adv.focusMode = 'continuous';
+    }
+    if(S.hw.zoom){
+      try{
+        const caps = S.track.getCapabilities();
+        adv.zoom = Math.min(caps.zoom.max, Math.max(caps.zoom.min, S.zoom));
+      }catch(e){ adv.zoom = S.zoom; }
+    }
+    if(!Object.keys(adv).length) return;
+    try{ await S.track.applyConstraints({ advanced:[adv] }); }catch(e){ /* unsupported combo — engine covers it */ }
+  }, 60);
+}
+
+function applyTapFocus(x, y){
+  if(!S.track) return;
+  let caps = {};
+  try{ caps = S.track.getCapabilities()||{}; }catch(e){}
+  if('pointsOfInterest' in caps){
+    S.track.applyConstraints({ advanced:[{ pointsOfInterest:[{x,y}] }] }).catch(()=>{});
+  }
+}
+
+/* ---------------- WebGL film pipeline ---------------- */
+const VERT = `
+attribute vec2 p; varying vec2 vUv;
+void main(){ vUv = p*0.5+0.5; gl_Position = vec4(p,0.0,1.0); }`;
+
+const FRAG = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D u_tex;
+uniform vec2 u_res, u_vres;
+uniform float u_ev, u_temp, u_gamma, u_sat, u_vig, u_grain, u_seed, u_ab, u_soft, u_hal, u_flash, u_defocus, u_zoom, u_flip, u_leakAmt, u_distort, u_flare, u_dust, u_blur, u_dseed;
+uniform vec3 u_lift, u_gain, u_leakPos;
+uniform vec3 u_leakCol;
+float hash(vec2 q){ return fract(sin(dot(q, vec2(127.1,311.7)))*43758.5453); }
+void main(){
+  vec2 uv = vUv;
+  if(u_flip > 0.5) uv.x = 1.0 - uv.x;
+  /* cover-fit the sensor frame into the canvas */
+  float va = u_vres.x/u_vres.y, ca = u_res.x/u_res.y;
+  vec2 s = vec2(1.0);
+  if(va > ca) s.x = ca/va; else s.y = va/ca;
+  uv = (uv - 0.5) * s + 0.5;
+  uv = (uv - 0.5) / u_zoom + 0.5;
+
+  /* cheap fisheye — barrel distortion from a toy plastic lens */
+  float inFrame = 1.0;
+  if(u_distort > 0.001){
+    vec2 dd2 = uv - 0.5;
+    uv = 0.5 + dd2 * (1.0 + u_distort * dot(dd2, dd2) * 1.9);
+    inFrame = step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0);
+  }
+
+  vec2 d = uv - 0.5;
+  float r2 = dot(d,d);
+
+  /* disposable plastic-lens chromatic aberration */
+  float ca2 = u_ab * (0.4 + r2*2.2);
+  vec3 col;
+  col.r = texture2D(u_tex, uv + d*ca2).r;
+  col.g = texture2D(u_tex, uv).g;
+  col.b = texture2D(u_tex, uv - d*ca2).b;
+
+  /* edge softness + manual defocus (multi-tap) */
+  float blurR = (u_soft * smoothstep(0.02, 0.30, r2) + u_defocus) * 0.006;
+  if(blurR > 0.0004){
+    vec3 acc = col;
+    acc += texture2D(u_tex, uv + vec2( blurR, 0.0)).rgb;
+    acc += texture2D(u_tex, uv + vec2(-blurR, 0.0)).rgb;
+    acc += texture2D(u_tex, uv + vec2(0.0,  blurR)).rgb;
+    acc += texture2D(u_tex, uv + vec2(0.0, -blurR)).rgb;
+    col = mix(col, acc/5.0, 0.75);
+  }
+
+  /* all-over dream blur — smeared vaseline-on-the-lens softness */
+  if(u_blur > 0.01){
+    float br = u_blur * 0.005;
+    vec3 acc2 = col;
+    acc2 += texture2D(u_tex, uv + vec2( br,  br)).rgb;
+    acc2 += texture2D(u_tex, uv + vec2(-br,  br)).rgb;
+    acc2 += texture2D(u_tex, uv + vec2( br, -br)).rgb;
+    acc2 += texture2D(u_tex, uv + vec2(-br, -br)).rgb;
+    col = mix(col, acc2/5.0, u_blur*0.8);
+  }
+
+  /* exposure (EV dial + manual ISO/shutter math) */
+  col *= pow(2.0, u_ev);
+
+  /* direct-flash falloff — hot center, fast drop */
+  col *= 1.0 + u_flash * 0.85 * exp(-r2*4.2);
+
+  /* white balance */
+  col.r *= 1.0 + u_temp*0.22;
+  col.b *= 1.0 - u_temp*0.22;
+  col.g *= 1.0 + u_temp*0.03;
+
+  /* film curve: per-channel gamma / gain / lifted blacks */
+  col = pow(max(col, 0.0), vec3(u_gamma)) * u_gain + u_lift;
+
+  /* saturation */
+  float luma = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(vec3(luma), col, u_sat);
+
+  /* halation — highlights bloom warm, like cheap film stock */
+  vec3 wide = texture2D(u_tex, uv).rgb;
+  float hl = smoothstep(0.72, 1.05, dot(wide, vec3(0.299,0.587,0.114)) * pow(2.0, u_ev));
+  col += vec3(1.0, 0.32, 0.10) * hl * u_hal * 0.28;
+
+  /* flare — highlights smear sideways + a ghost orb, bargain-lens style */
+  if(u_flare > 0.01){
+    float fa = 0.0;
+    fa += dot(texture2D(u_tex, uv + vec2( 0.05, 0.0)).rgb, vec3(0.333));
+    fa += dot(texture2D(u_tex, uv + vec2(-0.05, 0.0)).rgb, vec3(0.333));
+    fa += dot(texture2D(u_tex, uv + vec2( 0.11, 0.0)).rgb, vec3(0.333)) * 0.7;
+    fa += dot(texture2D(u_tex, uv + vec2(-0.11, 0.0)).rgb, vec3(0.333)) * 0.7;
+    fa /= 3.4;
+    float streak = smoothstep(0.55, 1.0, fa * pow(2.0, u_ev));
+    col += vec3(1.0, 0.85, 0.60) * streak * u_flare * 0.38;
+    float gl2 = dot(texture2D(u_tex, 1.0 - uv).rgb, vec3(0.333));
+    col += vec3(0.45, 0.60, 1.0) * smoothstep(0.70, 1.10, gl2) * u_flare * 0.10;
+  }
+
+  /* light leak */
+  float lk = exp(-pow(distance(uv, u_leakPos.xy) * (1.6 + u_leakPos.z), 2.0)) * u_leakAmt;
+  col += u_leakCol * lk;
+
+  /* vignette — heavier than a phone lens, like a FunSaver */
+  col *= 1.0 - u_vig * smoothstep(0.18, 0.85, r2*1.55);
+
+  /* dust, scratches, blotches — decades in a shoebox */
+  if(u_dust > 0.01){
+    vec2 cell = floor(uv * vec2(340.0, 460.0));
+    float sp = hash(cell + floor(u_dseed)*13.7);
+    col = mix(col, vec3(0.93), step(0.9975, sp) * u_dust * 0.55);
+    float line = step(0.9993, hash(vec2(floor(uv.x*420.0) + floor(u_dseed)*7.0, 3.0)));
+    col += vec3(0.5) * line * u_dust * 0.22;
+    float bl = step(0.996, hash(cell*1.7 + 4.0 + floor(u_dseed)));
+    col = mix(col, vec3(0.05), bl * u_dust * 0.35);
+  }
+
+  /* grain — scales with ISO, sits in the shadows */
+  float g = hash(uv * u_res * 0.55 + fract(u_seed)*371.0) - 0.5;
+  col += g * u_grain * (1.15 - luma*0.75);
+
+  /* fisheye corners fall off the film gate */
+  if(u_distort > 0.001) col *= inFrame;
+
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+function makePipeline(canvas){
+  const gl = canvas.getContext('webgl', { preserveDrawingBuffer:true, antialias:false });
+  if(!gl) return null;
+  function shader(type, src){
+    const sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh);
+    return sh;
+  }
+  const prog = gl.createProgram();
+  gl.attachShader(prog, shader(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, FRAG));
+  gl.linkProgram(prog); gl.useProgram(prog);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'p');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  const U = {};
+  ['u_tex','u_res','u_vres','u_ev','u_temp','u_gamma','u_sat','u_vig','u_grain','u_seed','u_ab','u_soft','u_hal','u_flash','u_defocus','u_zoom','u_flip','u_leakAmt','u_lift','u_gain','u_leakPos','u_leakCol','u_distort','u_flare','u_dust','u_blur','u_dseed']
+    .forEach(n => U[n] = gl.getUniformLocation(prog, n));
+  gl.uniform1i(U.u_tex, 0);
+  return { gl, U,
+    render(params){
+      const { gl, U } = this;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+      gl.uniform2f(U.u_res, canvas.width, canvas.height);
+      gl.uniform2f(U.u_vres, video.videoWidth||4, video.videoHeight||3);
+      gl.uniform1f(U.u_ev, params.ev);
+      gl.uniform1f(U.u_temp, params.temp);
+      gl.uniform1f(U.u_gamma, params.stock.gamma);
+      gl.uniform1f(U.u_sat, params.stock.sat);
+      gl.uniform1f(U.u_vig, params.stock.vig);
+      gl.uniform1f(U.u_grain, params.grain);
+      gl.uniform1f(U.u_seed, params.seed);
+      gl.uniform1f(U.u_ab, params.stock.ab);
+      gl.uniform1f(U.u_soft, params.stock.soft);
+      gl.uniform1f(U.u_hal, params.stock.hal);
+      gl.uniform1f(U.u_flash, params.flash);
+      gl.uniform1f(U.u_defocus, params.defocus);
+      gl.uniform1f(U.u_zoom, S.zoom);
+      gl.uniform1f(U.u_flip, S.facing==='user' ? 1 : 0);
+      gl.uniform1f(U.u_leakAmt, params.leakAmt);
+      gl.uniform3f(U.u_leakPos, params.leakPos[0], params.leakPos[1], params.leakPos[2]);
+      gl.uniform3f(U.u_leakCol, 1.0, 0.42, 0.12);
+      gl.uniform3f(U.u_lift, ...params.stock.lift);
+      gl.uniform3f(U.u_gain, ...params.stock.gain);
+      gl.uniform1f(U.u_distort, params.stock.distort || 0);
+      gl.uniform1f(U.u_flare, params.stock.flare || 0);
+      gl.uniform1f(U.u_dust, params.stock.dust || 0);
+      gl.uniform1f(U.u_blur, params.stock.blur || 0);
+      gl.uniform1f(U.u_dseed, params.dustSeed || 0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+  };
+}
+
+/* exposure math shared by preview + capture */
+function currentParams(seed){
+  const stock = STOCKS[S.stock];
+  let ev = S.ev;
+  if(S.mode==='man') ev += Math.log2(S.iso/400) + Math.log2(S.ss/125);
+  const grain = stock.grain * (0.55 + S.iso/650);
+  const temp = stock.temp + (5600 - S.wb)/4200;
+  const defocus = (S.mode==='man') ? Math.abs(S.focus-50)/50 * 0.85 : 0;
+  return { stock, ev, grain, temp, defocus,
+           flash: stock.flash || 0, seed: seed!==undefined ? seed : Math.random(),
+           dustSeed: S.dustSeed,
+           leakAmt:0, leakPos:[0.85, 0.1, 0.4] };
+}
+
+/* ---------------- Preview loop ---------------- */
+const pipe = makePipeline(view);
+function fitCanvas(){
+  const dpr = Math.min(window.devicePixelRatio||1, 2);
+  view.width  = Math.round(window.innerWidth  * dpr * 0.9);
+  view.height = Math.round(window.innerHeight * dpr * 0.9);
+}
+window.addEventListener('resize', fitCanvas);
+function loop(){
+  requestAnimationFrame(loop);
+  if(pipe && video.readyState >= 2 && video.videoWidth) pipe.render(currentParams());
+}
+
+/* ---------------- Readout + dial ---------------- */
+const PARAMS = {
+  ev:   { min:-2, max:2, step:0.1, get:()=>S.ev, set:v=>{ S.ev=+v; }, fmt:()=> (S.ev>0?'+':'') + S.ev.toFixed(1) },
+  iso:  { min:0, max:ISO_STEPS.length-1, step:1, get:()=>ISO_STEPS.indexOf(S.iso), set:i=>{ S.iso=ISO_STEPS[+i]; }, fmt:()=> String(S.iso) },
+  ss:   { min:0, max:SS_STEPS.length-1, step:1, get:()=>SS_STEPS.indexOf(S.ss), set:i=>{ S.ss=SS_STEPS[+i]; }, fmt:()=> '1/'+S.ss },
+  wb:   { min:2800, max:7500, step:100, get:()=>S.wb, set:v=>{ S.wb=+v; }, fmt:()=> S.wb+'K' },
+  focus:{ min:0, max:100, step:1, get:()=>S.focus, set:v=>{ S.focus=+v; }, fmt:()=> S.mode==='man' ? Math.round(S.focus)+'%' : 'AF' },
+  zoom: { min:1, max:4, step:0.05, get:()=>S.zoom, set:v=>{ S.zoom=+v; }, fmt:()=> S.zoom.toFixed(1)+'×' }
+};
+const dial = $('dial');
+(function ticks(){ let h=''; for(let i=0;i<25;i++) h+='<i></i>'; $('dialTicks').innerHTML=h; })();
+
+function updateReadout(){
+  $('roISO').textContent = S.iso;
+  $('roSS').textContent = '1/'+S.ss;
+  $('roEV').textContent = (S.ev>0?'+':'') + S.ev.toFixed(1);
+  $('roWB').textContent = S.wb+'K';
+}
+function selectParam(p){
+  S.param = p;
+  document.querySelectorAll('.ptab').forEach(t=>t.classList.toggle('on', t.dataset.p===p));
+  const cfg = PARAMS[p];
+  dial.min=cfg.min; dial.max=cfg.max; dial.step=cfg.step; dial.value=cfg.get();
+  $('dialVal').textContent = cfg.fmt();
+  updateReadout();
+}
+dial.addEventListener('input', ()=>{
+  if((S.param==='iso'||S.param==='ss'||S.param==='focus') && S.mode==='auto'){
+    setMode('man'); toast('MANUAL MODE');
+  }
+  PARAMS[S.param].set(dial.value);
+  $('dialVal').textContent = PARAMS[S.param].fmt();
+  updateReadout(); applyHardware();
+});
+document.querySelectorAll('.ptab').forEach(t=> t.addEventListener('click', ()=> selectParam(t.dataset.p)));
+
+function setMode(m){
+  S.mode = m;
+  $('amAuto').classList.toggle('on', m==='auto');
+  $('amMan').classList.toggle('on', m==='man');
+  if(m==='auto'){ S.focus = 50; }
+  if(S.param==='focus') selectParam('focus');
+  applyHardware();
+}
+$('amAuto').addEventListener('click', ()=> setMode('auto'));
+$('amMan').addEventListener('click', ()=> setMode('man'));
+
+/* film stocks */
+document.querySelectorAll('.chip').forEach(c=> c.addEventListener('click', ()=>{
+  document.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));
+  c.classList.add('on'); S.stock = c.dataset.stock;
+  toast('STOCK · ' + c.textContent.trim());
+}));
+
+/* ---------------- Top bar controls ---------------- */
+$('flashBtn').addEventListener('click', ()=>{
+  S.flash = !S.flash;
+  $('flashBtn').classList.toggle('on', S.flash);
+  toast(S.flash ? 'FLASH ON' : 'FLASH OFF');
+});
+const TIMERS = [0,3,10];
+$('timerBtn').addEventListener('click', ()=>{
+  const i = (TIMERS.indexOf(S.timer)+1) % TIMERS.length;
+  S.timer = TIMERS[i];
+  $('timerBtn').classList.toggle('on', S.timer>0);
+  $('timerMini').style.display = S.timer>0 ? 'block':'none';
+  $('timerMini').textContent = S.timer;
+  toast(S.timer ? 'TIMER '+S.timer+'S' : 'TIMER OFF');
+});
+$('gridBtn').addEventListener('click', ()=>{
+  $('grid').classList.toggle('on');
+  $('gridBtn').classList.toggle('on', $('grid').classList.contains('on'));
+});
+$('setBtn').addEventListener('click', ()=> $('setSheet').classList.add('open'));
+$('rollBtn').addEventListener('click', ()=> $('rollSheet').classList.add('open'));
+document.querySelectorAll('[data-close]').forEach(b=> b.addEventListener('click', ()=> $(b.dataset.close).classList.remove('open')));
+
+const TGL = { tglDate:'date', tglBorder:'border', tglLeak:'leak', tglLevel:'level', tglFull:'full' };
+Object.keys(TGL).forEach(id=>{
+  $(id).addEventListener('click', ()=>{
+    const el = $(id); el.classList.toggle('on');
+    S.settings[TGL[id]] = el.classList.contains('on');
+    if(id==='tglLevel') $('horizon').classList.toggle('on', S.settings.level);
+  });
+});
+
+/* ---------------- Tap focus + pinch zoom ---------------- */
+let pointers = new Map(), downAt = 0, downPos = null, pinchD0 = 0, zoom0 = 1, moved = false;
+view.addEventListener('pointerdown', e=>{
+  pointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+  if(pointers.size===1){ downAt = performance.now(); downPos = {x:e.clientX, y:e.clientY}; moved = false; }
+  if(pointers.size===2){
+    const [a,b] = [...pointers.values()];
+    pinchD0 = Math.hypot(a.x-b.x, a.y-b.y); zoom0 = S.zoom;
+  }
+});
+view.addEventListener('pointermove', e=>{
+  if(!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+  if(downPos && Math.hypot(e.clientX-downPos.x, e.clientY-downPos.y) > 12) moved = true;
+  if(pointers.size===2 && pinchD0>0){
+    const [a,b] = [...pointers.values()];
+    const d = Math.hypot(a.x-b.x, a.y-b.y);
+    S.zoom = Math.min(4, Math.max(1, zoom0 * d / pinchD0));
+    if(S.param==='zoom') selectParam('zoom');
+    applyHardware();
+  }
+});
+view.addEventListener('pointerup', e=>{
+  const wasSingle = pointers.size===1;
+  pointers.delete(e.pointerId);
+  if(wasSingle && !moved && performance.now()-downAt < 300){
+    const r = $('reticle');
+    r.style.left = e.clientX+'px'; r.style.top = e.clientY+'px';
+    r.classList.remove('pop','fade'); void r.offsetWidth; r.classList.add('pop');
+    setTimeout(()=> r.classList.add('fade'), 1300);
+    applyTapFocus(e.clientX/window.innerWidth, e.clientY/window.innerHeight);
+    if(S.mode==='man'){ /* keep dial focus */ }
+  }
+});
+view.addEventListener('dblclick', ()=>{ S.zoom = 1; if(S.param==='zoom') selectParam('zoom'); toast('ZOOM 1.0×'); });
+
+/* ---------------- Capture ---------------- */
+const wait = ms => new Promise(r=>setTimeout(r, ms));
+function blink(op){
+  const b = $('blink');
+  b.style.transition='none'; b.style.opacity = op;
+  requestAnimationFrame(()=>{ b.style.transition='opacity .4s'; b.style.opacity = 0; });
+}
+let toastT = null;
+function toast(msg){
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(()=> t.classList.remove('show'), 1700);
+}
+
+async function capture(){
+  if(S.capturing || !video.videoWidth) return;
+  S.capturing = true;
+  if(S.timer>0){
+    for(let n=S.timer; n>0; n--){
+      $('count').textContent = n; $('count').style.opacity = 1;
+      if(n<=3) blink(0.12);
+      await wait(1000);
+    }
+    $('count').style.opacity = 0;
+  }
+  let torchOn = false;
+  if(S.flash){
+    blink(0.9);
+    if(S.track){ try{ await S.track.applyConstraints({ advanced:[{ torch:true }] }); torchOn = true; }catch(e){} }
+  } else blink(0.22);
+
+  const p = currentParams(Math.random()*97.3);
+  p.dustSeed = Math.random()*100;
+  if(S.flash) p.flash = 1;
+  const leakP = (STOCKS[S.stock].leakP !== undefined) ? STOCKS[S.stock].leakP : 0.42;
+  if(S.settings.leak && Math.random() < leakP){
+    p.leakAmt = 0.22 + Math.random()*0.5;
+    p.leakPos = [Math.random()<0.5 ? 0.04 : 0.96, Math.random()*0.45, 0.3 + Math.random()*0.5];
+  }
+
+  let vw = video.videoWidth, vh = video.videoHeight;
+  if(!S.settings.full){
+    const m = Math.max(vw, vh);
+    if(m > 1600){ const k = 1600/m; vw = Math.round(vw*k); vh = Math.round(vh*k); }
+  }
+  const cap = document.createElement('canvas');
+  cap.width = vw; cap.height = vh;
+  const cp = makePipeline(cap);
+  if(cp){ cp.render(p); }
+  try{ const lc = cp && cp.gl.getExtension('WEBGL_lose_context'); if(lc) lc.loseContext(); }catch(e){}
+
+  const out = document.createElement('canvas');
+  const b = S.settings.border ? Math.round(vw*0.045) : 0;
+  out.width = vw + b*2; out.height = vh + b*2;
+  const ctx = out.getContext('2d');
+  if(b){ ctx.fillStyle = '#f7f4ee'; ctx.fillRect(0,0,out.width,out.height); }
+  ctx.drawImage(cap, b, b);
+  if(S.settings.date){
+    const now = new Date();
+    const txt = (now.getMonth()+1) + ' ' + now.getDate() + " '" + String(now.getFullYear()).slice(2);
+    const fs = Math.round(vw*0.030);
+    ctx.font = '700 ' + fs + 'px "JetBrains Mono", monospace';
+    ctx.textAlign = 'right';
+    ctx.shadowColor = 'rgba(255,110,0,.95)'; ctx.shadowBlur = fs*0.4;
+    ctx.fillStyle = '#ff8c1a';
+    ctx.fillText(txt, b + vw - fs*0.7, b + vh - fs*0.7);
+  }
+  if(torchOn){ try{ await S.track.applyConstraints({ advanced:[{ torch:false }] }); }catch(e){} }
+
+  out.toBlob(async blob=>{
+    if(blob){ await rollAdd(blob); toast('SAVED TO ROLL'); }
+    if(navigator.vibrate) navigator.vibrate(12);
+    S.capturing = false;
+  }, 'image/jpeg', 0.92);
+}
+$('shutter').addEventListener('click', capture);
+$('flipBtn').addEventListener('click', async ()=>{
+  S.facing = S.facing==='environment' ? 'user' : 'environment';
+  try{ await initCamera(); toast(S.facing==='user' ? 'FRONT CAMERA' : 'REAR CAMERA'); }
+  catch(e){ toast('CAMERA SWITCH FAILED'); }
+});
+
+/* ---------------- Film roll (IndexedDB) ---------------- */
+let db = null, rollItems = [], viewing = null;
+function dbOpen(){
+  return new Promise((res, rej)=>{
+    const r = indexedDB.open('dispo', 1);
+    r.onupgradeneeded = ()=>{ r.result.createObjectStore('roll', { keyPath:'id', autoIncrement:true }); };
+    r.onsuccess = ()=> res(r.result);
+    r.onerror = ()=> rej(r.error);
+  });
+}
+async function rollAdd(blob){
+  db = db || await dbOpen();
+  return new Promise(res=>{
+    const tx = db.transaction('roll','readwrite');
+    tx.objectStore('roll').add({ blob, ts: Date.now() });
+    tx.oncomplete = ()=>{ refreshRoll(); res(); };
+    tx.onerror = ()=> res();
+  });
+}
+async function rollAll(){
+  db = db || await dbOpen();
+  return new Promise(res=>{
+    const out = [];
+    const rq = db.transaction('roll').objectStore('roll').openCursor(null, 'prev');
+    rq.onsuccess = ()=>{ const c = rq.result; if(c){ out.push(c.value); c.continue(); } else res(out); };
+    rq.onerror = ()=> res(out);
+  });
+}
+async function rollDel(id){
+  db = db || await dbOpen();
+  return new Promise(res=>{
+    const tx = db.transaction('roll','readwrite');
+    tx.objectStore('roll').delete(id);
+    tx.oncomplete = ()=> res();
+    tx.onerror = ()=> res();
+  });
+}
+async function refreshRoll(){
+  rollItems = await rollAll().catch(()=>[]);
+  const grid = $('rollGrid'); grid.innerHTML = '';
+  rollItems.forEach(it=>{
+    const img = document.createElement('img');
+    img.src = URL.createObjectURL(it.blob);
+    img.addEventListener('click', ()=> openViewer(it));
+    grid.appendChild(img);
+  });
+  $('rollEmpty').style.display = rollItems.length ? 'none' : 'flex';
+  grid.style.display = rollItems.length ? 'grid' : 'none';
+  $('rollCount').style.display = rollItems.length ? 'block' : 'none';
+  $('rollCount').textContent = rollItems.length;
+  if(rollItems.length) $('rollBtn').style.backgroundImage = 'url(' + URL.createObjectURL(rollItems[0].blob) + ')';
+}
+function openViewer(it){
+  viewing = it;
+  $('viewerImg').src = URL.createObjectURL(it.blob);
+  $('viewer').classList.add('open');
+}
+$('closeViewer').addEventListener('click', ()=> $('viewer').classList.remove('open'));
+$('delBtn').addEventListener('click', async ()=>{
+  if(!viewing) return;
+  await rollDel(viewing.id);
+  $('viewer').classList.remove('open');
+  refreshRoll(); toast('FRAME DELETED');
+});
+$('shareBtn').addEventListener('click', async ()=>{
+  if(!viewing) return;
+  const file = new File([viewing.blob], 'dispo-' + viewing.id + '.jpg', { type:'image/jpeg' });
+  if(navigator.canShare && navigator.canShare({ files:[file] })){
+    try{ await navigator.share({ files:[file] }); }catch(e){}
+  } else {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(viewing.blob);
+    a.download = file.name; a.click();
+  }
+});
+
+/* ---------------- Gate ---------------- */
+$('startBtn').addEventListener('click', async ()=>{
+  const err = $('gateErr');
+  try{
+    await initCamera();
+    $('gate').style.display = 'none';
+    fitCanvas(); loop(); refreshRoll(); selectParam('ev');
+    toast('STOCK · KODAK');
+  }catch(e){
+    err.style.display = 'block';
+    err.textContent = 'Camera could not start. DISPO needs camera permission and a secure (HTTPS) page — open it from its published link, allow the camera, and try again.';
+  }
+});
+selectParam('ev');
+updateReadout();
+</script>
+</body>
+</html>
