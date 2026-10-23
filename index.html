@@ -539,6 +539,7 @@ function makePipeline(canvas){
       const { gl, U } = this;
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); /* video frames are top-down, GL textures bottom-up */
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
       gl.uniform2f(U.u_res, canvas.width, canvas.height);
       gl.uniform2f(U.u_vres, video.videoWidth||4, video.videoHeight||3);
@@ -768,7 +769,6 @@ async function capture(){
   cap.width = vw; cap.height = vh;
   const cp = makePipeline(cap);
   if(cp){ cp.render(p); }
-  try{ const lc = cp && cp.gl.getExtension('WEBGL_lose_context'); if(lc) lc.loseContext(); }catch(e){}
 
   const out = document.createElement('canvas');
   const b = S.settings.border ? Math.round(vw*0.045) : 0;
@@ -776,6 +776,9 @@ async function capture(){
   const ctx = out.getContext('2d');
   if(b){ ctx.fillStyle = '#f7f4ee'; ctx.fillRect(0,0,out.width,out.height); }
   ctx.drawImage(cap, b, b);
+  /* free the capture context only AFTER its pixels are copied out —
+     losing it earlier wipes the frame and saves a black image */
+  try{ const lc = cp && cp.gl.getExtension('WEBGL_lose_context'); if(lc) lc.loseContext(); }catch(e){}
   if(S.settings.date){
     const now = new Date();
     const txt = (now.getMonth()+1) + ' ' + now.getDate() + " '" + String(now.getFullYear()).slice(2);
